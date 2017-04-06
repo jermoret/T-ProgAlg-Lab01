@@ -1,8 +1,8 @@
 //-- ----------------------------------------------------------------------------*/
-//  Standard multiplication algorithm 
+//  Parallel multiplication algorithm (with MPI and OpenMP)
 //  Author : Pierre Kuonen
 //  Created 20.2.2016
-//  Modification: Francois Kilchoer 2016/03/04
+//  Modification: Jérôme Moret & Dousse Kewin 06.04.2017
 
 #define sizeMatrix 2048
 
