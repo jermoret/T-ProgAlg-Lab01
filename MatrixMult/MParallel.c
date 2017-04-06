@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <ctype.h>
 #include <sys/time.h>
 #include <limits.h>  // CLOCKS_PER_SEC
@@ -98,7 +99,7 @@ void dump(double *matrix, int size, FILE *f) {
 
 // -- -----------------------------------------------------------
 int main(int argc, char *argv[]) {
-    int size, debug = 0, taskid, numtasks, from, to;
+    int size, debug = 0, taskid, numtasks;
     unsigned long start_time_lt, initTime, compTime;
     double start, finish;
     char *resultFileName = NULL;
@@ -117,32 +118,29 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "debug is now on.\n");
     }
 
-
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &taskid); /* who am i */
     MPI_Comm_size(MPI_COMM_WORLD, &numtasks); /* number of processors */
 
-    if (size % numtasks != 0) {
-        if (taskid == 0) printf("Matrix size not divisible by number of processors\n");
-        MPI_Finalize();
-        exit(-1);
-    }
+    int stripe_height = size / numtasks;
+    int extra_stripe_height = size % numtasks; // if size isn't divisible by number of processors
 
-    //printf("taskid : %d\n", taskid);
-    from = taskid * size / numtasks;
-    to = (taskid + 1) * size / numtasks;
+    // Stripe indices
+    int from = taskid * stripe_height;
+    int to = (taskid + 1) * stripe_height;
+    if (taskid == numtasks - 1) // Last worker compute last stripe + extra stripe
+        to += extra_stripe_height;
 
     if (taskid == 0 && debug) fprintf(stderr, "\nStart parallel MPI/OpenMP algorithm (size=%d)...\n", size);
 
+    // Init time = time to allocate and to send matrices to workers
     if (taskid == 0)
         start_time_lt = my_ftime();  //-- -------------------------- Take starting Time
 
-    // Allocate matrix on every nodes
-    A = allocate_real_matrix(size, -1);
-    B = allocate_real_matrix(size, -1);
-    C = allocate_real_matrix(size, -2);
+    int stripe_size = stripe_height * size;
+    int last_stripe_size = extra_stripe_height * size + stripe_size;
 
-    /*if(taskid == 0) { // Allocate only on master node (less efficient in this context)
+    if (taskid == 0) { // Fill only on master node
         A = allocate_real_matrix(size, -1);
         B = allocate_real_matrix(size, -1);
         C = allocate_real_matrix(size, -2);
@@ -150,29 +148,44 @@ int main(int argc, char *argv[]) {
         A = allocate_real_matrix(size, -2);
         B = allocate_real_matrix(size, -2);
         C = allocate_real_matrix(size, -2);
-    }*/
-
-
-    if (taskid == 0 && debug) {
-        fprintf(stderr, "Created Matrices A, B and C of size %dx%d\n", size, size);
     }
+
+    // Each node compute size / #nodes lines of C so we need to broadcast full matrix B
+    MPI_Bcast(B, size * size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    // Send only my concerned stripe
+    int *displs = (int *) malloc(numtasks * sizeof(int)); /* displacement (relative to send buffer) */
+    int *scounts = (int *) malloc(numtasks * sizeof(int)); /* nb of elements to send */
+
+    // For worker 1 to n - 1
+    for (i = 0; i < numtasks - 1; ++i) {
+        displs[i] = i * stripe_size;
+        scounts[i] = stripe_size;
+    }
+
+    // For last worker
+    displs[i] = i * stripe_size;
+    scounts[i] = last_stripe_size;
+
+    // Send stripes of A to workers
+    if (taskid == 0)
+        MPI_Scatterv(A, scounts, displs, MPI_DOUBLE, MPI_IN_PLACE, stripe_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    else
+        MPI_Scatterv(A, scounts, displs, MPI_DOUBLE, A + from * size,
+                     (taskid == numtasks - 1) ? last_stripe_size : stripe_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (taskid == 0)
         initTime = my_ftime() - start_time_lt;  //-- ----------------- Measure init. Time
 
+    if (taskid == 0 && debug) {
+        fprintf(stderr, "Created and sent Matrices A, B and C of size %dx%d\n", size, size);
+    }
 
-    // Unnecessary because the matrices are allocated on every nodes
-    /*MPI_Bcast (B, size * size, MPI_DOUBLE, 0, MPI_COMM_WORLD); // Need to broadcast full matrix B
-
-    // Send only my line
-    if(taskid == 0)
-        MPI_Scatter (A, size * size / numtasks, MPI_DOUBLE, MPI_IN_PLACE, size * size / numtasks, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    else
-        MPI_Scatter (A, size * size / numtasks, MPI_DOUBLE, A + from * size, size * size / numtasks, MPI_DOUBLE, 0, MPI_COMM_WORLD);*/
-
-    #pragma omp parallel shared(A,B,C) private(i,j,k)
+    // Each node compute the multiplication (MPI)
+    // Parallelization of multiplication on a node (OpenMP)
+#pragma omp parallel shared(A,B,C) private(i,j,k)
     {
-        #pragma omp for schedule(static)
+#pragma omp for schedule(static)
         for (i = from; i < to; i++)
             for (j = 0; j < size; j++) {
                 C[i * size + j] = 0;
@@ -181,17 +194,12 @@ int main(int argc, char *argv[]) {
             }
     }
 
-
+    // Get stripes of C from workers
     if (taskid == 0)
-        MPI_Gather(MPI_IN_PLACE, size * size / numtasks, MPI_DOUBLE, C, size * size / numtasks, MPI_DOUBLE, 0,
-                   MPI_COMM_WORLD);
+        MPI_Gatherv(MPI_IN_PLACE, stripe_size, MPI_DOUBLE, C, scounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     else
-        MPI_Gather(C + from * size, size * size / numtasks, MPI_DOUBLE, C, size * size / numtasks, MPI_DOUBLE, 0,
-                   MPI_COMM_WORLD);
-
-    //finish = MPI_Wtime(); /*stop timer*/
-
-    //printf("Parallel Elapsed time : %f seconds\n", finish - start);
+        MPI_Gatherv(C + from * size, (taskid == numtasks - 1) ? last_stripe_size : stripe_size, MPI_DOUBLE, C, scounts,
+                    displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (taskid == 0)
         compTime = my_ftime() - start_time_lt - initTime; //-- --------Measure computing Time
@@ -231,6 +239,13 @@ int main(int argc, char *argv[]) {
     }
     if (taskid == 0 && debug) fprintf(stderr, "Done!\n");
 
+    free_real_matrix(A, size);
+    free_real_matrix(B, size);
+    free_real_matrix(C, size);
+    free(scounts);
+    free(displs);
+
     MPI_Finalize();
+
     return 0;
 }
