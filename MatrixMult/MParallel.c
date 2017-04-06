@@ -137,11 +137,12 @@ int main(int argc, char *argv[]) {
     if (taskid == 0)
         start_time_lt = my_ftime();  //-- -------------------------- Take starting Time
 
+    // Allocate matrix on every nodes
     A = allocate_real_matrix(size, -1);
     B = allocate_real_matrix(size, -1);
     C = allocate_real_matrix(size, -2);
 
-    /*if(taskid == 0) {
+    /*if(taskid == 0) { // Allocate only on master node (less efficient in this context)
         A = allocate_real_matrix(size, -1);
         B = allocate_real_matrix(size, -1);
         C = allocate_real_matrix(size, -2);
@@ -159,26 +160,27 @@ int main(int argc, char *argv[]) {
     if (taskid == 0)
         initTime = my_ftime() - start_time_lt;  //-- ----------------- Measure init. Time
 
-    //start = MPI_Wtime(); /* start timer */
 
-    /*MPI_Bcast (B, size * size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    // Unnecessary because the matrices are allocated on every nodes
+    /*MPI_Bcast (B, size * size, MPI_DOUBLE, 0, MPI_COMM_WORLD); // Need to broadcast full matrix B
 
+    // Send only my line
     if(taskid == 0)
         MPI_Scatter (A, size * size / numtasks, MPI_DOUBLE, MPI_IN_PLACE, size * size / numtasks, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     else
         MPI_Scatter (A, size * size / numtasks, MPI_DOUBLE, A + from * size, size * size / numtasks, MPI_DOUBLE, 0, MPI_COMM_WORLD);*/
 
-    for (i = from; i < to; i++) {
-#pragma omp parallel shared(A,B,C) private(i,j,k)
-        {
-#pragma omp for schedule(static)
-        for (j = 0; j < size; j++) {
-            C[i * size + j] = 0;
-            for (k = 0; k < size; k++)
-                C[i * size + j] += A[i * size + k] * B[k * size + j];
-        }
-        }
+    #pragma omp parallel shared(A,B,C) private(i,j,k)
+    {
+        #pragma omp for schedule(static)
+        for (i = from; i < to; i++)
+            for (j = 0; j < size; j++) {
+                C[i * size + j] = 0;
+                for (k = 0; k < size; k++)
+                    C[i * size + j] += A[i * size + k] * B[k * size + j];
+            }
     }
+
 
     if (taskid == 0)
         MPI_Gather(MPI_IN_PLACE, size * size / numtasks, MPI_DOUBLE, C, size * size / numtasks, MPI_DOUBLE, 0,
