@@ -100,7 +100,7 @@ void dump(double *matrix, int size, FILE *f) {
 // -- -----------------------------------------------------------
 int main(int argc, char *argv[]) {
     int size, debug = 0, taskid, numtasks;
-    unsigned long start_time_lt, initTime, compTime;
+    unsigned long start_time_lt, initTime, compTime, sendTime;
     double start, finish;
     char *resultFileName = NULL;
     register int i, j, k;
@@ -167,6 +167,9 @@ int main(int argc, char *argv[]) {
     displs[i] = i * stripe_size;
     scounts[i] = last_stripe_size;
 
+    if (taskid == 0)
+        initTime = my_ftime() - start_time_lt; //-- ------------------ Measure init. Time
+
     // Send stripes of A to workers
     if (taskid == 0)
         MPI_Scatterv(A, scounts, displs, MPI_DOUBLE, MPI_IN_PLACE, stripe_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -175,7 +178,7 @@ int main(int argc, char *argv[]) {
                      (taskid == numtasks - 1) ? last_stripe_size : stripe_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (taskid == 0)
-        initTime = my_ftime() - start_time_lt;  //-- ----------------- Measure init. Time
+        sendTime = my_ftime() - start_time_lt;  //-- ----------------- Measure send. Time
 
     if (taskid == 0 && debug) {
         fprintf(stderr, "Created and sent Matrices A, B and C of size %dx%d\n", size, size);
@@ -212,7 +215,6 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "B[%dx%d]:\n", size, size);
         display(B, size, size < 100 ? size : 100);
     }
-
     if (taskid == 0 && debug) {
         fprintf(stderr, "C[%dx%d]=A*B:\n", size, size);
         display(C, size, size < 100 ? size : 100);
@@ -220,8 +222,8 @@ int main(int argc, char *argv[]) {
 
     if (taskid == 0) {
         // Print and stores timing results in a file
-        printf("Times (init and computing) = %.4g, %.4g sec\n\n", initTime / 1000.0, compTime / 1000.0);
-        printf("size=%d\tinitTime=%g\tcomputeTime=%g (%lu min, %lu sec)\n", size, initTime / 1000.0, compTime / 1000.0,
+        printf("Times (init, send and computing) = %.4g, %.4g, %.4g sec\n\n", initTime / 1000.0, sendTime / 1000.0, compTime / 1000.0);
+        printf("size=%d\tinitTime=%g\tsendTime=%g\tcomputeTime=%g (%lu min, %lu sec)\n", size, initTime / 1000.0, sendTime / 1000.0, compTime / 1000.0,
                (compTime / 1000) / 60, (compTime / 1000) % 60);
     }
 
