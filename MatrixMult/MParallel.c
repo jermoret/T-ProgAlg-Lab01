@@ -99,7 +99,7 @@ void dump(double *matrix, int size, FILE *f) {
 
 // -- -----------------------------------------------------------
 int main(int argc, char *argv[]) {
-    int size, debug = 0, taskid, numtasks;
+    int size, debug = 0, taskid, numtasks, nbthreads = 1;
     unsigned long start_time_lt, initTime, compTime, sendTime;
     double start, finish;
     char *resultFileName = NULL;
@@ -112,6 +112,10 @@ int main(int argc, char *argv[]) {
     for (k = 1; k < argc; ++k) {
         if (isdigit(argv[k][0]))    // assume it is the matrix size
             size = atoi(argv[k]);
+	else if (isdigit(argv[k][0]) && size > 0) { // assume the second number is the number of threads
+	    nbthreads = atoi(argv[k]);
+	    omp_set_num_threads(nbthreads);
+	}
         else if (strncmp(argv[k], "dump", 4) == 0) // assume dump=filename
             resultFileName = strchr(argv[k], '=');
         else if (debug = strncmp(argv[k], "debug", 5) == 0) // want debuging info
